@@ -12,10 +12,21 @@ import {
 
 export const SidebarViewType = 'sidebar-view';
 
+interface SidebarSettings {
+  collapsedGroups: string[];
+}
+
+const DEFAULT_SETTINGS: SidebarSettings = {
+  collapsedGroups: []
+};
+
 export default class BasesSidebarPlugin extends Plugin {
+  settings: SidebarSettings;
   private embeddedLeaves: Map<string, WorkspaceLeaf> = new Map();
 
   async onload() {
+    await this.loadSettings();
+
     this.registerBasesView(SidebarViewType, {
       name: 'Sidebar',
       icon: 'layout-sidebar-left',
@@ -39,6 +50,14 @@ export default class BasesSidebarPlugin extends Plugin {
     });
 
     this.loadStyles();
+  }
+
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
   }
 
   registerEmbeddedLeaf(id: string, leaf: WorkspaceLeaf) {
@@ -138,6 +157,7 @@ export default class BasesSidebarPlugin extends Plugin {
         flex-shrink: 0;
         display: flex;
         flex-direction: column;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       }
 
       /* Resizer */
@@ -195,6 +215,12 @@ export default class BasesSidebarPlugin extends Plugin {
 
       .bases-sidebar-group {
         margin-bottom: 8px;
+      }
+
+      .bases-sidebar-group:not(:first-child) {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--background-modifier-border);
       }
 
       .bases-sidebar-group-header {
@@ -283,6 +309,7 @@ export default class BasesSidebarPlugin extends Plugin {
         background-color: var(--background-primary);
         display: flex;
         flex-direction: column;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       }
 
       /* Hide reading mode toggle in embedded editor */
@@ -340,6 +367,99 @@ export default class BasesSidebarPlugin extends Plugin {
         background-color: var(--background-modifier-hover);
         color: var(--text-normal);
       }
+
+      /* Mobile back button */
+      .bases-sidebar-back-btn {
+        display: none;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        font-size: 14px;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-bottom: 1px solid var(--background-modifier-border);
+        background-color: var(--background-secondary);
+        flex-shrink: 0;
+      }
+
+      .bases-sidebar-back-btn:hover {
+        background-color: var(--background-modifier-hover);
+        color: var(--text-normal);
+      }
+
+      .bases-sidebar-back-btn svg {
+        flex-shrink: 0;
+      }
+
+      /* Mobile styles */
+      @media screen and (max-width: 768px) {
+        .bases-sidebar-view-container {
+          position: relative;
+          overflow: hidden;
+        }
+
+        .bases-sidebar-view-container.is-mobile {
+          position: absolute;
+        }
+
+        .bases-sidebar-left-panel {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100% !important;
+          height: 100%;
+          z-index: 2;
+          border-right: none;
+          transform: translateX(0);
+        }
+
+        .bases-sidebar-left-panel.slide-out {
+          transform: translateX(-100%);
+        }
+
+        .bases-sidebar-resizer {
+          display: none;
+        }
+
+        .bases-sidebar-right-panel {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          z-index: 1;
+          transform: translateX(100%);
+          background-color: var(--background-primary);
+        }
+
+        .bases-sidebar-right-panel.slide-in {
+          transform: translateX(0);
+          z-index: 3;
+        }
+
+        .bases-sidebar-right-panel .workspace-leaf,
+        .bases-sidebar-right-panel .workspace-leaf-content,
+        .bases-sidebar-right-panel .view-content {
+          background-color: var(--background-primary);
+        }
+
+        .bases-sidebar-back-btn {
+          display: flex;
+        }
+
+        /* Note item arrow indicator on mobile */
+        .bases-sidebar-note-item::after {
+          content: '';
+          width: 8px;
+          height: 8px;
+          border-right: 2px solid var(--text-muted);
+          border-bottom: 2px solid var(--text-muted);
+          transform: rotate(-45deg);
+          flex-shrink: 0;
+          margin-left: 8px;
+          align-self: center;
+        }
+      }
     `;
     document.head.appendChild(styleEl);
     this.register(() => styleEl.remove());
@@ -353,6 +473,7 @@ class SidebarBasesView extends BasesView {
   private notesContainer: HTMLElement;
   private rightPanel: HTMLElement;
   private resizer: HTMLElement;
+  private backButton: HTMLElement;
   private selectedPath: string | null = null;
   private obsidianApp: App;
   private plugin: BasesSidebarPlugin;
@@ -360,6 +481,7 @@ class SidebarBasesView extends BasesView {
   private embeddedLeaf: WorkspaceLeaf | null = null;
   private navbarVisible: boolean = true;
   private collapsedGroups: Set<string> = new Set();
+  private isMobile: boolean = false;
   hoverPopover: HoverPopover | null = null;
 
   constructor(controller: QueryController, parentEl: HTMLElement, app: App, plugin: BasesSidebarPlugin) {
@@ -373,32 +495,73 @@ class SidebarBasesView extends BasesView {
     this.resizer = this.containerEl.createDiv('bases-sidebar-resizer');
     this.rightPanel = this.containerEl.createDiv('bases-sidebar-right-panel');
 
+    // Create back button for mobile
+    this.backButton = this.rightPanel.createDiv('bases-sidebar-back-btn');
+    this.backButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>`;
+    this.backButton.createSpan({ text: 'Back to notes' });
+    this.backButton.addEventListener('click', () => this.navigateBack());
+
     this.setupResizer();
     this.loadPersistedWidth();
     this.loadNavbarState();
     this.loadCollapsedState();
+    this.checkMobileLayout();
+    this.setupResizeObserver();
     this.renderEmptyState();
   }
 
   private loadCollapsedState(): void {
-    try {
-      const saved = this.config?.get('collapsedGroups');
-      if (Array.isArray(saved)) {
-        this.collapsedGroups = new Set(saved);
-      }
-    } catch (e) {
-      // Ignore errors
+    if (this.plugin.settings && this.plugin.settings.collapsedGroups) {
+      this.collapsedGroups = new Set(this.plugin.settings.collapsedGroups);
     }
   }
 
   private saveCollapsedState(): void {
-    try {
-      if (this.config && typeof this.config.set === 'function') {
-        this.config.set('collapsedGroups', Array.from(this.collapsedGroups));
-      }
-    } catch (e) {
-      // Ignore errors
+    this.plugin.settings.collapsedGroups = Array.from(this.collapsedGroups);
+    this.plugin.saveSettings();
+  }
+
+  private checkMobileLayout(): void {
+    const wasMobile = this.isMobile;
+    this.isMobile = window.innerWidth <= 768;
+
+    if (this.isMobile) {
+      this.containerEl.addClass('is-mobile');
+    } else {
+      this.containerEl.removeClass('is-mobile');
+      // Reset animation classes when switching to desktop
+      this.leftPanel.removeClass('slide-out');
+      this.rightPanel.removeClass('slide-in');
     }
+  }
+
+  private setupResizeObserver(): void {
+    const resizeHandler = () => {
+      this.checkMobileLayout();
+    };
+
+    window.addEventListener('resize', resizeHandler);
+
+    // Cleanup on unload
+    this.register?.(() => {
+      window.removeEventListener('resize', resizeHandler);
+    });
+  }
+
+  private navigateToNote(): void {
+    if (!this.isMobile) return;
+
+    // Animate: slide sidebar out, slide note in
+    this.leftPanel.addClass('slide-out');
+    this.rightPanel.addClass('slide-in');
+  }
+
+  private navigateBack(): void {
+    if (!this.isMobile) return;
+
+    // Animate: slide note out, slide sidebar in
+    this.leftPanel.removeClass('slide-out');
+    this.rightPanel.removeClass('slide-in');
   }
 
   private setupResizer(): void {
@@ -524,6 +687,12 @@ class SidebarBasesView extends BasesView {
   }
 
   private selectFirstEntry(): void {
+    // On mobile, don't auto-open - let user choose which note to view
+    if (this.isMobile) {
+      this.renderEmptyState();
+      return;
+    }
+
     if (this.data.groupedData.length > 0 && this.data.groupedData[0].entries.length > 0) {
       const entry = this.data.groupedData[0].entries[0];
       this.openFileInEditor(entry);
@@ -717,10 +886,15 @@ class SidebarBasesView extends BasesView {
     // Reuse existing leaf for smooth transitions
     if (this.embeddedLeaf && this.embeddedLeaf.view instanceof MarkdownView) {
       const currentFile = this.embeddedLeaf.view.file;
-      if (currentFile && currentFile.path === filePath) return;
+      if (currentFile && currentFile.path === filePath) {
+        // Still navigate on mobile even if same file
+        this.navigateToNote();
+        return;
+      }
 
       await this.embeddedLeaf.openFile(file);
       await this.setReadingMode();
+      this.navigateToNote();
       return;
     }
 
@@ -730,12 +904,22 @@ class SidebarBasesView extends BasesView {
       this.embeddedLeaf = null;
     }
 
-    this.rightPanel.empty();
+    // Clear right panel content but preserve back button
+    const children = Array.from(this.rightPanel.children);
+    children.forEach(child => {
+      if (!child.hasClass('bases-sidebar-back-btn')) {
+        child.remove();
+      }
+    });
 
-    const leaf = this.obsidianApp.workspace.createLeafInParent(
-      this.obsidianApp.workspace.rootSplit,
-      0
-    );
+    // Create a detached leaf directly to avoid workspace layout issues
+    // This prevents the black screen issue on mobile where manipulating rootSplit
+    // causes the workspace to reset or clear the content
+    const leaf = new (WorkspaceLeaf as any)(this.obsidianApp);
+
+    // Manually mount the leaf to our right panel
+    const leafElement = (leaf as any).containerEl as HTMLElement;
+    this.rightPanel.appendChild(leafElement);
 
     await leaf.openFile(file);
     await this.setReadingMode();
@@ -743,15 +927,8 @@ class SidebarBasesView extends BasesView {
     this.embeddedLeaf = leaf;
     this.plugin.registerEmbeddedLeaf(this.viewId, leaf);
 
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    const leafElement = (leaf as any).containerEl as HTMLElement;
-
-    if (leafElement && leafElement.parentElement) {
-      leafElement.parentElement.removeChild(leafElement);
-      this.rightPanel.appendChild(leafElement);
-      this.rightPanel.offsetHeight; // Force reflow
-    }
+    // Trigger mobile navigation animation
+    this.navigateToNote();
   }
 
   private async setReadingMode(): Promise<void> {
@@ -788,7 +965,14 @@ class SidebarBasesView extends BasesView {
   }
 
   private renderEmptyState(): void {
-    this.rightPanel.empty();
+    // Clear right panel content but preserve back button
+    const children = Array.from(this.rightPanel.children);
+    children.forEach(child => {
+      if (!child.hasClass('bases-sidebar-back-btn')) {
+        child.remove();
+      }
+    });
+
     const emptyState = this.rightPanel.createDiv('bases-sidebar-empty-state');
     emptyState.createDiv({ text: 'Select a note to view its content' });
   }

@@ -153,6 +153,7 @@ var BasesSidebarPlugin = class extends import_obsidian.Plugin {
         flex-shrink: 0;
         display: flex;
         flex-direction: column;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       }
 
       /* Resizer */
@@ -219,6 +220,32 @@ var BasesSidebarPlugin = class extends import_obsidian.Plugin {
         color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .bases-sidebar-group-header:hover {
+        color: var(--text-normal);
+      }
+
+      .bases-sidebar-group-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 4px;
+        width: 16px;
+        height: 16px;
+        transition: transform 0.2s ease;
+      }
+
+      .bases-sidebar-group-toggle.is-collapsed {
+        transform: rotate(-90deg);
+      }
+
+      .bases-sidebar-group-content.is-collapsed {
+        display: none;
       }
 
       .bases-sidebar-note-item {
@@ -272,6 +299,7 @@ var BasesSidebarPlugin = class extends import_obsidian.Plugin {
         background-color: var(--background-primary);
         display: flex;
         flex-direction: column;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       }
 
       /* Hide reading mode toggle in embedded editor */
@@ -329,6 +357,91 @@ var BasesSidebarPlugin = class extends import_obsidian.Plugin {
         background-color: var(--background-modifier-hover);
         color: var(--text-normal);
       }
+
+      /* Mobile back button */
+      .bases-sidebar-back-btn {
+        display: none;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        font-size: 14px;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-bottom: 1px solid var(--background-modifier-border);
+        background-color: var(--background-secondary);
+        flex-shrink: 0;
+      }
+
+      .bases-sidebar-back-btn:hover {
+        background-color: var(--background-modifier-hover);
+        color: var(--text-normal);
+      }
+
+      .bases-sidebar-back-btn svg {
+        flex-shrink: 0;
+      }
+
+      /* Mobile styles */
+      @media screen and (max-width: 768px) {
+        .bases-sidebar-view-container {
+          position: relative;
+          overflow: hidden;
+        }
+
+        .bases-sidebar-view-container.is-mobile {
+          position: absolute;
+        }
+
+        .bases-sidebar-left-panel {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100% !important;
+          height: 100%;
+          z-index: 2;
+          border-right: none;
+          transform: translateX(0);
+        }
+
+        .bases-sidebar-left-panel.slide-out {
+          transform: translateX(-100%);
+        }
+
+        .bases-sidebar-resizer {
+          display: none;
+        }
+
+        .bases-sidebar-right-panel {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          z-index: 1;
+          transform: translateX(100%);
+        }
+
+        .bases-sidebar-right-panel.slide-in {
+          transform: translateX(0);
+        }
+
+        .bases-sidebar-back-btn {
+          display: flex;
+        }
+
+        /* Note item arrow indicator on mobile */
+        .bases-sidebar-note-item::after {
+          content: '';
+          width: 8px;
+          height: 8px;
+          border-right: 2px solid var(--text-muted);
+          border-bottom: 2px solid var(--text-muted);
+          transform: rotate(-45deg);
+          flex-shrink: 0;
+          margin-left: 8px;
+          align-self: center;
+        }
+      }
     `;
     document.head.appendChild(styleEl);
     this.register(() => styleEl.remove());
@@ -341,6 +454,8 @@ var SidebarBasesView = class extends import_obsidian.BasesView {
     this.selectedPath = null;
     this.embeddedLeaf = null;
     this.navbarVisible = true;
+    this.collapsedGroups = /* @__PURE__ */ new Set();
+    this.isMobile = false;
     this.hoverPopover = null;
     this.obsidianApp = app;
     this.plugin = plugin;
@@ -349,10 +464,68 @@ var SidebarBasesView = class extends import_obsidian.BasesView {
     this.leftPanel = this.containerEl.createDiv("bases-sidebar-left-panel");
     this.resizer = this.containerEl.createDiv("bases-sidebar-resizer");
     this.rightPanel = this.containerEl.createDiv("bases-sidebar-right-panel");
+    this.backButton = this.rightPanel.createDiv("bases-sidebar-back-btn");
+    this.backButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>`;
+    this.backButton.createSpan({ text: "Back to notes" });
+    this.backButton.addEventListener("click", () => this.navigateBack());
     this.setupResizer();
     this.loadPersistedWidth();
     this.loadNavbarState();
+    this.loadCollapsedState();
+    this.checkMobileLayout();
+    this.setupResizeObserver();
     this.renderEmptyState();
+  }
+  loadCollapsedState() {
+    var _a;
+    try {
+      const saved = (_a = this.config) == null ? void 0 : _a.get("collapsedGroups");
+      if (Array.isArray(saved)) {
+        this.collapsedGroups = new Set(saved);
+      }
+    } catch (e) {
+    }
+  }
+  saveCollapsedState() {
+    try {
+      if (this.config && typeof this.config.set === "function") {
+        this.config.set("collapsedGroups", Array.from(this.collapsedGroups));
+      }
+    } catch (e) {
+    }
+  }
+  checkMobileLayout() {
+    const wasMobile = this.isMobile;
+    this.isMobile = window.innerWidth <= 768;
+    if (this.isMobile) {
+      this.containerEl.addClass("is-mobile");
+    } else {
+      this.containerEl.removeClass("is-mobile");
+      this.leftPanel.removeClass("slide-out");
+      this.rightPanel.removeClass("slide-in");
+    }
+  }
+  setupResizeObserver() {
+    var _a;
+    const resizeHandler = () => {
+      this.checkMobileLayout();
+    };
+    window.addEventListener("resize", resizeHandler);
+    (_a = this.register) == null ? void 0 : _a.call(this, () => {
+      window.removeEventListener("resize", resizeHandler);
+    });
+  }
+  navigateToNote() {
+    if (!this.isMobile)
+      return;
+    this.leftPanel.addClass("slide-out");
+    this.rightPanel.addClass("slide-in");
+  }
+  navigateBack() {
+    if (!this.isMobile)
+      return;
+    this.leftPanel.removeClass("slide-out");
+    this.rightPanel.removeClass("slide-in");
   }
   setupResizer() {
     let isResizing = false;
@@ -462,6 +635,10 @@ var SidebarBasesView = class extends import_obsidian.BasesView {
     return null;
   }
   selectFirstEntry() {
+    if (this.isMobile) {
+      this.renderEmptyState();
+      return;
+    }
     if (this.data.groupedData.length > 0 && this.data.groupedData[0].entries.length > 0) {
       const entry = this.data.groupedData[0].entries[0];
       this.openFileInEditor(entry);
@@ -498,17 +675,38 @@ var SidebarBasesView = class extends import_obsidian.BasesView {
     this.notesContainer = this.leftPanel.createDiv("bases-sidebar-notes-container");
     for (const group of this.data.groupedData) {
       const groupEl = this.notesContainer.createDiv("bases-sidebar-group");
+      let groupContentContainer = groupEl;
       if (group.hasKey() && group.key) {
         const keyStr = group.key.toString();
         if (keyStr && keyStr !== "undefined") {
-          groupEl.createDiv({
-            cls: "bases-sidebar-group-header",
-            text: keyStr
+          const header2 = groupEl.createDiv("bases-sidebar-group-header");
+          const toggle = header2.createDiv("bases-sidebar-group-toggle");
+          toggle.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+          header2.createSpan({ text: keyStr });
+          groupContentContainer = groupEl.createDiv("bases-sidebar-group-content");
+          const isCollapsed = this.collapsedGroups.has(keyStr);
+          if (isCollapsed) {
+            toggle.addClass("is-collapsed");
+            groupContentContainer.addClass("is-collapsed");
+          }
+          header2.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (this.collapsedGroups.has(keyStr)) {
+              this.collapsedGroups.delete(keyStr);
+              toggle.removeClass("is-collapsed");
+              groupContentContainer.removeClass("is-collapsed");
+            } else {
+              this.collapsedGroups.add(keyStr);
+              toggle.addClass("is-collapsed");
+              groupContentContainer.addClass("is-collapsed");
+            }
+            this.saveCollapsedState();
           });
         }
       }
       for (const entry of group.entries) {
-        this.renderNoteItem(groupEl, entry);
+        this.renderNoteItem(groupContentContainer, entry);
       }
     }
   }
@@ -599,17 +797,25 @@ var SidebarBasesView = class extends import_obsidian.BasesView {
     this.updateSelectionHighlight();
     if (this.embeddedLeaf && this.embeddedLeaf.view instanceof import_obsidian.MarkdownView) {
       const currentFile = this.embeddedLeaf.view.file;
-      if (currentFile && currentFile.path === filePath)
+      if (currentFile && currentFile.path === filePath) {
+        this.navigateToNote();
         return;
+      }
       await this.embeddedLeaf.openFile(file);
       await this.setReadingMode();
+      this.navigateToNote();
       return;
     }
     if (this.embeddedLeaf) {
       this.embeddedLeaf.detach();
       this.embeddedLeaf = null;
     }
-    this.rightPanel.empty();
+    const children = Array.from(this.rightPanel.children);
+    children.forEach((child) => {
+      if (!child.hasClass("bases-sidebar-back-btn")) {
+        child.remove();
+      }
+    });
     const leaf = this.obsidianApp.workspace.createLeafInParent(
       this.obsidianApp.workspace.rootSplit,
       0
@@ -625,6 +831,7 @@ var SidebarBasesView = class extends import_obsidian.BasesView {
       this.rightPanel.appendChild(leafElement);
       this.rightPanel.offsetHeight;
     }
+    this.navigateToNote();
   }
   async setReadingMode() {
     if (this.embeddedLeaf && this.embeddedLeaf.view instanceof import_obsidian.MarkdownView) {
@@ -659,7 +866,12 @@ tags:
     await this.openFileInEditor(entry);
   }
   renderEmptyState() {
-    this.rightPanel.empty();
+    const children = Array.from(this.rightPanel.children);
+    children.forEach((child) => {
+      if (!child.hasClass("bases-sidebar-back-btn")) {
+        child.remove();
+      }
+    });
     const emptyState = this.rightPanel.createDiv("bases-sidebar-empty-state");
     emptyState.createDiv({ text: "Select a note to view its content" });
   }

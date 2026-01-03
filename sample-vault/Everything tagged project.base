@@ -14,3 +14,6 @@ views:
     leftWidth: 276
     showProperties: false
     navbarVisible: false
+    groupSeparator: " · tags"
+    collapsedGroups:
+      - "#project, #note"

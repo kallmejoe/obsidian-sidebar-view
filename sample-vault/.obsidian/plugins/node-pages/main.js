@@ -21,776 +21,732 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/node-pages/main.ts
+// main.ts
 var main_exports = {};
 __export(main_exports, {
-  default: () => NodePagesPlugin
+  SidebarViewType: () => SidebarViewType,
+  default: () => BasesSidebarPlugin
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
-var DEFAULT_SETTINGS = {
-  nodeTypes: [
-    {
-      tag: "task",
-      displayName: "Task",
-      icon: "check-square",
-      color: "#7c3aed",
-      properties: [
-        { name: "status", type: "select", options: ["todo", "in-progress", "done"], default: "todo" },
-        { name: "priority", type: "select", options: ["low", "medium", "high"], default: "medium" },
-        { name: "due", type: "date" },
-        { name: "assignee", type: "text" }
-      ]
-    },
-    {
-      tag: "project",
-      displayName: "Project",
-      icon: "folder",
-      color: "#2563eb",
-      properties: [
-        { name: "status", type: "select", options: ["planning", "active", "completed", "archived"], default: "planning" },
-        { name: "category", type: "text" },
-        { name: "progress", type: "text" },
-        { name: "deadline", type: "date" }
-      ]
-    },
-    {
-      tag: "note",
-      displayName: "Note",
-      icon: "file-text",
-      color: "#059669",
-      properties: [
-        { name: "category", type: "text" },
-        { name: "created", type: "date" }
-      ]
-    }
-  ],
-  defaultExpanded: false,
-  showNodeHeader: true
-};
-var NodePagesPlugin = class extends import_obsidian.Plugin {
+var SidebarViewType = "sidebar-view";
+var BasesSidebarPlugin = class extends import_obsidian.Plugin {
+  constructor() {
+    super(...arguments);
+    this.embeddedLeaves = /* @__PURE__ */ new Map();
+  }
   async onload() {
-    await this.loadSettings();
+    this.registerBasesView(SidebarViewType, {
+      name: "Sidebar",
+      icon: "layout-sidebar-left",
+      factory: (controller, containerEl) => {
+        return new SidebarBasesView(controller, containerEl, this.app, this);
+      },
+      options: () => [
+        {
+          type: "text",
+          displayName: "Group separator",
+          key: "groupSeparator",
+          default: " \xB7 "
+        },
+        {
+          type: "toggle",
+          displayName: "Show properties",
+          key: "showProperties",
+          default: false
+        }
+      ]
+    });
     this.loadStyles();
-    this.addSettingTab(new NodePagesSettingTab(this.app, this));
-    this.registerMarkdownPostProcessor((el, ctx) => {
-      this.processNodeHeader(el, ctx);
-    });
-    this.addCommand({
-      id: "create-node-page",
-      name: "Create new node page",
-      callback: () => {
-        new CreateNodeModal(this.app, this).open();
-      }
-    });
-    this.addCommand({
-      id: "toggle-node-expanded",
-      name: "Toggle node expanded/collapsed",
-      checkCallback: (checking) => {
-        const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-        if (view) {
-          if (!checking) {
-            this.toggleNodeExpanded(view);
-          }
-          return true;
-        }
-        return false;
-      }
-    });
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => {
-        this.refreshActiveView();
-      })
-    );
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian.TFile) {
-          this.refreshActiveView();
-        }
-      })
-    );
-    console.log("Node Pages plugin loaded");
+  }
+  registerEmbeddedLeaf(id, leaf) {
+    const oldLeaf = this.embeddedLeaves.get(id);
+    if (oldLeaf) {
+      oldLeaf.detach();
+    }
+    this.embeddedLeaves.set(id, leaf);
+  }
+  cleanupEmbeddedLeaf(id) {
+    const leaf = this.embeddedLeaves.get(id);
+    if (leaf) {
+      leaf.detach();
+      this.embeddedLeaves.delete(id);
+    }
   }
   onunload() {
-    if (this.styleEl) {
-      this.styleEl.remove();
+    for (const [id, leaf] of this.embeddedLeaves) {
+      leaf.detach();
     }
-    console.log("Node Pages plugin unloaded");
-  }
-  async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-  }
-  async saveSettings() {
-    await this.saveData(this.settings);
-  }
-  getNodeTypeForTags(tags) {
-    for (const tag of tags) {
-      const cleanTag = tag.replace(/^#/, "").toLowerCase();
-      const nodeType = this.settings.nodeTypes.find(
-        (nt) => nt.tag.toLowerCase() === cleanTag
-      );
-      if (nodeType)
-        return nodeType;
-    }
-    return null;
-  }
-  refreshActiveView() {
-    var _a;
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-    if (view && view.file) {
-      (_a = view.previewMode) == null ? void 0 : _a.rerender(true);
-    }
-  }
-  toggleNodeExpanded(view) {
-    const container = view.containerEl.querySelector(".node-page-header");
-    if (container) {
-      container.classList.toggle("is-expanded");
-    }
-  }
-  async processNodeHeader(el, ctx) {
-    var _a, _b;
-    const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
-    if (!(file instanceof import_obsidian.TFile))
-      return;
-    const cache = this.app.metadataCache.getFileCache(file);
-    if (!cache)
-      return;
-    let tags = [];
-    if (cache.frontmatter && cache.frontmatter.tags) {
-      const fmTags = cache.frontmatter.tags;
-      tags = Array.isArray(fmTags) ? fmTags.map((t) => String(t)) : [String(fmTags)];
-    } else if (cache.tags && Array.isArray(cache.tags)) {
-      tags = cache.tags.map((t) => typeof t === "string" ? t : t.tag).filter(Boolean);
-    } else {
-      try {
-        const content = await this.app.vault.read(file);
-        const re = /(^|\s)#([A-Za-z0-9/_-]+)/g;
-        const found = [];
-        for (const m of content.matchAll(re)) {
-          if (m[2])
-            found.push(m[2]);
-        }
-        tags = found;
-      } catch (e) {
-        tags = [];
-      }
-    }
-    const normalizedTags = tags.map((t) => String(t));
-    console.log("NodePages: detected tags for", file.path, normalizedTags);
-    const nodeType = this.getNodeTypeForTags(normalizedTags);
-    console.log("NodePages: matched nodeType for", file.path, nodeType && nodeType.tag);
-    if (!nodeType)
-      return;
-    const isFirstElement = ((_a = el.parentElement) == null ? void 0 : _a.firstElementChild) === el;
-    if (!isFirstElement)
-      return;
-    const existingHeader = (_b = el.parentElement) == null ? void 0 : _b.querySelector(".node-page-header");
-    if (existingHeader)
-      return;
-    const nodeHeader = this.createNodeHeader(file, nodeType, cache.frontmatter || {});
-    try {
-      const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-      if (activeView && activeView.file && activeView.file.path === file.path) {
-        const previewRoot = activeView.containerEl.querySelector(".markdown-preview-section") || activeView.containerEl.querySelector(".markdown-preview-view") || activeView.containerEl.querySelector(".markdown-preview");
-        if (previewRoot && previewRoot.parentElement) {
-          const existing = previewRoot.parentElement.querySelector(".node-page-header");
-          if (!existing) {
-            previewRoot.parentElement.insertBefore(nodeHeader, previewRoot);
-            console.log(`NodePages: inserted header for ${file.path} into active preview root`);
-            return;
-          }
-        }
-      }
-    } catch (e) {
-    }
-    const parent = el.parentElement;
-    if (parent) {
-      const existingHeader2 = parent.querySelector(".node-page-header");
-      if (!existingHeader2)
-        parent.insertBefore(nodeHeader, parent.firstChild);
-      else
-        console.log(`NodePages: header already exists for ${file.path}`);
-    } else {
-      console.log(`NodePages: could not find insertion point for ${file.path}`);
-    }
-  }
-  createNodeHeader(file, nodeType, frontmatter) {
-    const container = document.createElement("div");
-    container.className = "node-page-header";
-    if (this.settings.defaultExpanded) {
-      container.classList.add("is-expanded");
-    }
-    container.style.setProperty("--node-color", nodeType.color || "#6366f1");
-    const headerBar = container.createDiv("node-header-bar");
-    const toggleBtn = headerBar.createDiv("node-toggle-btn");
-    (0, import_obsidian.setIcon)(toggleBtn, "chevron-right");
-    toggleBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      container.classList.toggle("is-expanded");
-    });
-    const iconEl = headerBar.createDiv("node-type-icon");
-    (0, import_obsidian.setIcon)(iconEl, nodeType.icon);
-    const titleEl = headerBar.createDiv("node-title");
-    titleEl.textContent = file.basename;
-    const badgeEl = headerBar.createDiv("node-type-badge");
-    badgeEl.textContent = nodeType.displayName;
-    const quickStatus = headerBar.createDiv("node-quick-status");
-    this.renderQuickStatus(quickStatus, nodeType, frontmatter);
-    const propertiesPanel = container.createDiv("node-properties-panel");
-    this.renderPropertiesPanel(propertiesPanel, file, nodeType, frontmatter);
-    return container;
-  }
-  renderQuickStatus(container, nodeType, frontmatter) {
-    container.empty();
-    const importantProps = nodeType.properties.slice(0, 3);
-    for (const prop of importantProps) {
-      const value = frontmatter[prop.name];
-      if (value !== void 0 && value !== null && value !== "") {
-        const propEl = container.createSpan("node-quick-prop");
-        propEl.createSpan({ cls: "node-quick-prop-name", text: prop.name + ":" });
-        propEl.createSpan({ cls: "node-quick-prop-value", text: String(value) });
-      }
-    }
-  }
-  renderPropertiesPanel(container, file, nodeType, frontmatter) {
-    container.empty();
-    for (const prop of nodeType.properties) {
-      const propRow = container.createDiv("node-property-row");
-      const labelEl = propRow.createDiv("node-property-label");
-      labelEl.textContent = prop.name;
-      const valueEl = propRow.createDiv("node-property-value");
-      this.renderPropertyEditor(valueEl, file, prop, frontmatter[prop.name]);
-    }
-  }
-  renderPropertyEditor(container, file, prop, value) {
-    const updateProperty = async (newValue) => {
-      await this.updateFileProperty(file, prop.name, newValue);
-    };
-    switch (prop.type) {
-      case "text":
-        const textInput = document.createElement("input");
-        textInput.type = "text";
-        textInput.className = "node-property-input";
-        textInput.value = value || "";
-        textInput.placeholder = `Enter ${prop.name}...`;
-        textInput.addEventListener("change", () => updateProperty(textInput.value));
-        textInput.addEventListener("blur", () => updateProperty(textInput.value));
-        container.appendChild(textInput);
-        break;
-      case "number":
-        const numInput = document.createElement("input");
-        numInput.type = "number";
-        numInput.className = "node-property-input";
-        numInput.value = value || "";
-        numInput.addEventListener("change", () => updateProperty(Number(numInput.value)));
-        container.appendChild(numInput);
-        break;
-      case "date":
-        const dateInput = document.createElement("input");
-        dateInput.type = "date";
-        dateInput.className = "node-property-input";
-        if (value) {
-          const date = new Date(value);
-          if (!isNaN(date.getTime())) {
-            dateInput.value = date.toISOString().split("T")[0];
-          }
-        }
-        dateInput.addEventListener("change", () => updateProperty(dateInput.value));
-        container.appendChild(dateInput);
-        break;
-      case "checkbox":
-        const checkInput = document.createElement("input");
-        checkInput.type = "checkbox";
-        checkInput.className = "node-property-checkbox";
-        checkInput.checked = Boolean(value);
-        checkInput.addEventListener("change", () => updateProperty(checkInput.checked));
-        container.appendChild(checkInput);
-        break;
-      case "select":
-        const selectEl = document.createElement("select");
-        selectEl.className = "node-property-select";
-        const emptyOpt = document.createElement("option");
-        emptyOpt.value = "";
-        emptyOpt.textContent = `Select ${prop.name}...`;
-        selectEl.appendChild(emptyOpt);
-        for (const opt of prop.options || []) {
-          const optEl = document.createElement("option");
-          optEl.value = opt;
-          optEl.textContent = opt;
-          if (value === opt)
-            optEl.selected = true;
-          selectEl.appendChild(optEl);
-        }
-        selectEl.addEventListener("change", () => updateProperty(selectEl.value));
-        container.appendChild(selectEl);
-        break;
-    }
-  }
-  async updateFileProperty(file, propertyName, value) {
-    const content = await this.app.vault.read(file);
-    const lines = content.split("\n");
-    let fmStart = -1;
-    let fmEnd = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].trim() === "---") {
-        if (fmStart === -1) {
-          fmStart = i;
-        } else {
-          fmEnd = i;
-          break;
-        }
-      }
-    }
-    if (fmStart === -1 || fmEnd === -1) {
-      new import_obsidian.Notice("Could not find frontmatter in file");
-      return;
-    }
-    let propertyFound = false;
-    for (let i = fmStart + 1; i < fmEnd; i++) {
-      const line = lines[i];
-      const match = line.match(/^(\s*)([^:]+):\s*(.*)$/);
-      if (match && match[2].trim() === propertyName) {
-        let formattedValue = value;
-        if (typeof value === "string" && value.includes(":")) {
-          formattedValue = `"${value}"`;
-        }
-        lines[i] = `${match[1]}${propertyName}: ${formattedValue}`;
-        propertyFound = true;
-        break;
-      }
-    }
-    if (!propertyFound) {
-      let formattedValue = value;
-      if (typeof value === "string" && value.includes(":")) {
-        formattedValue = `"${value}"`;
-      }
-      lines.splice(fmEnd, 0, `${propertyName}: ${formattedValue}`);
-    }
-    await this.app.vault.modify(file, lines.join("\n"));
+    this.embeddedLeaves.clear();
   }
   loadStyles() {
-    this.styleEl = document.createElement("style");
-    this.styleEl.id = "node-pages-styles";
-    this.styleEl.textContent = `
-      /* Node Page Header Container */
-      .node-page-header {
-        --node-color: #6366f1;
-        margin: 0 0 16px 0;
-        border-radius: 8px;
-        border: 1px solid var(--background-modifier-border);
-        background: var(--background-secondary);
+    const styleEl = document.createElement("style");
+    styleEl.id = "bases-sidebar-view-styles";
+    styleEl.textContent = `
+      /* Full height container - ensure Obsidian leaf header stays visible */
+      .workspace-leaf-content[data-type='bases'] {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+
+      /* Obsidian leaf header (file name, etc.) - always visible */
+      .workspace-leaf-content[data-type='bases'] > .view-header {
+        flex-shrink: 0;
+      }
+
+      /* View content takes remaining space */
+      .workspace-leaf-content[data-type='bases'] > .view-content {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
         overflow: hidden;
-        transition: all 0.2s ease;
+        position: relative;
       }
 
-      .node-page-header:hover {
-        border-color: var(--node-color);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      /* Bases settings navbar - positioned at top */
+      .workspace-leaf-content[data-type='bases'] .view-content > .bases-header {
+        position: relative;
+        z-index: 1;
+        flex-shrink: 0;
       }
 
-      /* Header Bar - Always Visible */
-      .node-header-bar {
+      /* Hide Bases settings navbar when toggled */
+      .workspace-leaf-content[data-type='bases'].hide-bases-navbar .view-content > .bases-header {
+        display: none !important;
+      }
+
+      /* Our sidebar container - absolutely positioned to fill remaining space */
+      .bases-sidebar-view-container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        overflow: hidden;
+        z-index: 0;
+        visibility: hidden;
+      }
+
+      /* Show container after initial layout is complete */
+      .bases-sidebar-view-container.ready {
+        visibility: visible;
+      }
+
+      /* When Bases navbar is visible, push container down */
+      .workspace-leaf-content[data-type='bases']:not(.hide-bases-navbar) .bases-sidebar-view-container {
+        top: var(--bases-header-height, 48px);
+      }
+
+      /* Left panel */
+      .bases-sidebar-left-panel {
+        width: 280px;
+        min-width: 150px;
+        height: 100%;
+        overflow-y: auto;
+        overflow-x: hidden;
+        border-right: 1px solid var(--background-modifier-border);
+        background-color: var(--background-secondary);
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Resizer */
+      .bases-sidebar-resizer {
+        width: 4px;
+        height: 100%;
+        background-color: var(--background-modifier-border);
+        cursor: col-resize;
+        flex-shrink: 0;
+        user-select: none;
+      }
+
+      .bases-sidebar-resizer:hover,
+      .bases-sidebar-resizer:active {
+        background-color: var(--interactive-accent);
+      }
+
+      .bases-sidebar-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--background-modifier-border);
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 12px 16px;
+        justify-content: space-between;
+        flex-shrink: 0;
+      }
+
+      .bases-sidebar-title {
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--text-normal);
+      }
+
+      .bases-sidebar-add-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        font-size: 13px;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 4px;
+      }
+
+      .bases-sidebar-add-btn:hover {
+        background-color: var(--background-modifier-hover);
+        color: var(--text-normal);
+      }
+
+      /* Notes list container */
+      .bases-sidebar-notes-container {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+
+      .bases-sidebar-group {
+        margin-bottom: 8px;
+      }
+
+      .bases-sidebar-group-header {
+        padding: 8px 16px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
         cursor: pointer;
         user-select: none;
       }
 
-      .node-header-bar:hover {
-        background: var(--background-modifier-hover);
-      }
-
-      /* Toggle Button */
-      .node-toggle-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 20px;
-        height: 20px;
-        border-radius: 4px;
-        color: var(--text-muted);
-        transition: all 0.15s ease;
-        flex-shrink: 0;
-      }
-
-      .node-toggle-btn:hover {
-        background: var(--background-modifier-hover);
+      .bases-sidebar-group-header:hover {
         color: var(--text-normal);
       }
 
-      .node-page-header.is-expanded .node-toggle-btn {
-        transform: rotate(90deg);
-      }
-
-      /* Type Icon */
-      .node-type-icon {
+      .bases-sidebar-group-toggle {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 28px;
-        height: 28px;
-        border-radius: 6px;
-        background: var(--node-color);
-        color: white;
-        flex-shrink: 0;
-      }
-
-      .node-type-icon svg {
+        margin-right: 4px;
         width: 16px;
         height: 16px;
+        transition: transform 0.2s ease;
       }
 
-      /* Title */
-      .node-title {
-        font-size: 16px;
-        font-weight: 600;
-        color: var(--text-normal);
+      .bases-sidebar-group-toggle.is-collapsed {
+        transform: rotate(-90deg);
+      }
+
+      .bases-sidebar-group-content.is-collapsed {
+        display: none;
+      }
+
+      .bases-sidebar-note-item {
+        display: flex;
+        align-items: flex-start;
+        padding: 10px 16px;
+        cursor: pointer;
+        border-left: 3px solid transparent;
+        transition: background-color 0.1s ease;
+      }
+
+      .bases-sidebar-note-item:hover {
+        background-color: var(--background-modifier-hover);
+      }
+
+      .bases-sidebar-note-item.is-selected {
+        background-color: var(--background-modifier-active-hover);
+        border-left-color: var(--interactive-accent);
+      }
+
+      .bases-sidebar-note-content {
         flex: 1;
+        min-width: 0;
+      }
+
+      .bases-sidebar-note-title {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-normal);
+        margin-bottom: 4px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
 
-      /* Type Badge */
-      .node-type-badge {
-        font-size: 11px;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        padding: 2px 8px;
-        border-radius: 4px;
-        background: var(--node-color);
-        color: white;
-        flex-shrink: 0;
-      }
-
-      /* Quick Status (collapsed view) */
-      .node-quick-status {
+      .bases-sidebar-note-meta {
         display: flex;
         align-items: center;
-        gap: 12px;
-        margin-left: auto;
-        flex-shrink: 0;
-      }
-
-      .node-page-header.is-expanded .node-quick-status {
-        display: none;
-      }
-
-      .node-quick-prop {
-        display: flex;
-        align-items: center;
-        gap: 4px;
+        gap: 6px;
         font-size: 12px;
-      }
-
-      .node-quick-prop-name {
         color: var(--text-muted);
+        flex-wrap: wrap;
       }
 
-      .node-quick-prop-value {
-        color: var(--text-normal);
-        font-weight: 500;
-      }
-
-      /* Properties Panel (expanded view) */
-      .node-properties-panel {
-        display: none;
-        padding: 0 16px 16px 16px;
-        border-top: 1px solid var(--background-modifier-border);
-        background: var(--background-primary);
-      }
-
-      .node-page-header.is-expanded .node-properties-panel {
-        display: block;
-      }
-
-      /* Property Row */
-      .node-property-row {
-        display: flex;
-        align-items: center;
-        padding: 8px 0;
-        border-bottom: 1px solid var(--background-modifier-border);
-      }
-
-      .node-property-row:last-child {
-        border-bottom: none;
-      }
-
-      .node-property-label {
-        width: 120px;
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--text-muted);
-        text-transform: capitalize;
-        flex-shrink: 0;
-      }
-
-      .node-property-value {
+      /* Right panel */
+      .bases-sidebar-right-panel {
         flex: 1;
+        height: 100%;
+        min-width: 0;
+        overflow: hidden;
+        background-color: var(--background-primary);
+        display: flex;
+        flex-direction: column;
       }
 
-      /* Property Inputs */
-      .node-property-input,
-      .node-property-select {
-        width: 100%;
-        padding: 6px 10px;
-        font-size: 13px;
-        border: 1px solid var(--background-modifier-border);
-        border-radius: 4px;
-        background: var(--background-primary);
-        color: var(--text-normal);
-        transition: border-color 0.15s ease;
-      }
-
-      .node-property-input:focus,
-      .node-property-select:focus {
-        outline: none;
-        border-color: var(--node-color);
-        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
-      }
-
-      .node-property-input::placeholder {
-        color: var(--text-faint);
-      }
-
-      .node-property-checkbox {
-        width: 18px;
-        height: 18px;
-        cursor: pointer;
-        accent-color: var(--node-color);
-      }
-
-      /* Hide default frontmatter when node header is present */
-      .node-page-header ~ .frontmatter,
-      .node-page-header ~ .frontmatter-container {
+      /* Hide reading mode toggle in embedded editor */
+      .bases-sidebar-right-panel .view-header-icon[aria-label*="reading"],
+      .bases-sidebar-right-panel .view-header-icon[aria-label*="edit"],
+      .bases-sidebar-right-panel .view-action[aria-label*="reading"],
+      .bases-sidebar-right-panel .view-action[aria-label*="edit"] {
         display: none !important;
       }
+
+      .bases-sidebar-right-panel > .workspace-leaf {
+        flex: 1;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .bases-sidebar-right-panel .workspace-leaf-content {
+        flex: 1;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .bases-sidebar-right-panel .view-content {
+        flex: 1;
+        overflow: auto;
+      }
+
+      .bases-sidebar-empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        flex: 1;
+        height: 100%;
+        color: var(--text-muted);
+        font-size: 14px;
+      }
+
+      /* Toggle navbar button */
+      .bases-sidebar-toggle-navbar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 8px;
+        margin-left: 8px;
+        font-size: 13px;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 4px;
+      }
+
+      .bases-sidebar-toggle-navbar:hover {
+        background-color: var(--background-modifier-hover);
+        color: var(--text-normal);
+      }
     `;
-    document.head.appendChild(this.styleEl);
+    document.head.appendChild(styleEl);
+    this.register(() => styleEl.remove());
   }
 };
-var CreateNodeModal = class extends import_obsidian.Modal {
-  constructor(app, plugin) {
-    super(app);
-    this.selectedType = null;
+var SidebarBasesView = class extends import_obsidian.BasesView {
+  constructor(controller, parentEl, app, plugin) {
+    super(controller);
+    this.type = SidebarViewType;
+    this.selectedPath = null;
+    this.embeddedLeaf = null;
+    this.navbarVisible = true;
+    this.collapsedGroups = /* @__PURE__ */ new Set();
+    this.hoverPopover = null;
+    this.obsidianApp = app;
     this.plugin = plugin;
+    this.viewId = `sidebar-${Date.now()}`;
+    this.containerEl = parentEl.createDiv("bases-sidebar-view-container");
+    this.leftPanel = this.containerEl.createDiv("bases-sidebar-left-panel");
+    this.resizer = this.containerEl.createDiv("bases-sidebar-resizer");
+    this.rightPanel = this.containerEl.createDiv("bases-sidebar-right-panel");
+    this.setupResizer();
+    this.loadPersistedWidth();
+    this.loadNavbarState();
+    this.loadCollapsedState();
+    this.renderEmptyState();
   }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("node-create-modal");
-    contentEl.createEl("h2", { text: "Create New Node Page" });
-    new import_obsidian.Setting(contentEl).setName("Title").addText((text) => {
-      this.titleInput = text;
-      text.setPlaceholder("Enter page title...");
-    });
-    new import_obsidian.Setting(contentEl).setName("Type").addDropdown((dropdown) => {
-      dropdown.addOption("", "Select type...");
-      for (const nodeType of this.plugin.settings.nodeTypes) {
-        dropdown.addOption(nodeType.tag, nodeType.displayName);
-      }
-      dropdown.onChange((value) => {
-        this.selectedType = this.plugin.settings.nodeTypes.find(
-          (nt) => nt.tag === value
-        ) || null;
-      });
-    });
-    new import_obsidian.Setting(contentEl).addButton((btn) => {
-      btn.setButtonText("Create").setCta().onClick(async () => {
-        await this.createNodePage();
-      });
-    });
-  }
-  async createNodePage() {
-    const title = this.titleInput.getValue().trim();
-    if (!title) {
-      new import_obsidian.Notice("Please enter a title");
-      return;
-    }
-    if (!this.selectedType) {
-      new import_obsidian.Notice("Please select a type");
-      return;
-    }
-    const properties = [
-      "---",
-      "tags:",
-      `  - ${this.selectedType.tag}`
-    ];
-    for (const prop of this.selectedType.properties) {
-      let defaultValue = prop.default !== void 0 ? prop.default : "";
-      if (prop.type === "date" && !defaultValue) {
-        defaultValue = new Date().toISOString().split("T")[0];
-      }
-      properties.push(`${prop.name}: ${defaultValue}`);
-    }
-    properties.push("---");
-    properties.push("");
-    properties.push(`# ${title}`);
-    properties.push("");
-    const content = properties.join("\n");
-    const fileName = `${title}.md`;
+  loadCollapsedState() {
+    var _a;
     try {
-      const file = await this.app.vault.create(fileName, content);
-      await this.app.workspace.getLeaf().openFile(file);
-      this.close();
-      new import_obsidian.Notice(`Created ${this.selectedType.displayName}: ${title}`);
+      const saved = (_a = this.config) == null ? void 0 : _a.get("collapsedGroups");
+      if (Array.isArray(saved)) {
+        this.collapsedGroups = new Set(saved);
+      }
     } catch (e) {
-      new import_obsidian.Notice(`Failed to create file: ${e.message}`);
     }
   }
-  onClose() {
-    const { contentEl } = this;
-    contentEl.empty();
-  }
-};
-var NodePagesSettingTab = class extends import_obsidian.PluginSettingTab {
-  constructor(app, plugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-  display() {
-    const { containerEl } = this;
-    containerEl.empty();
-    containerEl.createEl("h2", { text: "Node Pages Settings" });
-    new import_obsidian.Setting(containerEl).setName("Default expanded").setDesc("Whether node headers are expanded by default").addToggle((toggle) => {
-      toggle.setValue(this.plugin.settings.defaultExpanded);
-      toggle.onChange(async (value) => {
-        this.plugin.settings.defaultExpanded = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    containerEl.createEl("h3", { text: "Node Types" });
-    containerEl.createEl("p", {
-      text: "Configure which tags map to node types and their properties.",
-      cls: "setting-item-description"
-    });
-    for (const nodeType of this.plugin.settings.nodeTypes) {
-      this.renderNodeTypeSettings(containerEl, nodeType);
+  saveCollapsedState() {
+    try {
+      if (this.config && typeof this.config.set === "function") {
+        this.config.set("collapsedGroups", Array.from(this.collapsedGroups));
+      }
+    } catch (e) {
     }
-    new import_obsidian.Setting(containerEl).addButton((btn) => {
-      btn.setButtonText("Add Node Type").onClick(async () => {
-        const newType = {
-          tag: "new-type",
-          displayName: "New Type",
-          icon: "file",
-          properties: []
-        };
-        this.plugin.settings.nodeTypes.push(newType);
-        await this.plugin.saveSettings();
-        this.display();
-      });
+  }
+  setupResizer() {
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+    const onMouseMove = (e) => {
+      if (!isResizing)
+        return;
+      const delta = e.clientX - startX;
+      const newWidth = Math.max(150, Math.min(600, startWidth + delta));
+      this.leftPanel.style.width = `${newWidth}px`;
+    };
+    const onMouseUp = () => {
+      if (!isResizing)
+        return;
+      isResizing = false;
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      this.resizer.style.backgroundColor = "";
+      this.persistWidth();
+    };
+    this.resizer.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      isResizing = true;
+      startX = e.clientX;
+      startWidth = this.leftPanel.offsetWidth;
+      document.body.style.cursor = "col-resize";
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
     });
   }
-  renderNodeTypeSettings(container, nodeType) {
-    const typeContainer = container.createDiv("node-type-settings");
-    typeContainer.style.padding = "12px";
-    typeContainer.style.marginBottom = "12px";
-    typeContainer.style.border = "1px solid var(--background-modifier-border)";
-    typeContainer.style.borderRadius = "8px";
-    new import_obsidian.Setting(typeContainer).setName("Tag").setDesc("The tag that identifies this node type (without #)").addText((text) => {
-      text.setValue(nodeType.tag);
-      text.onChange(async (value) => {
-        nodeType.tag = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    new import_obsidian.Setting(typeContainer).setName("Display Name").addText((text) => {
-      text.setValue(nodeType.displayName);
-      text.onChange(async (value) => {
-        nodeType.displayName = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    new import_obsidian.Setting(typeContainer).setName("Icon").setDesc("Lucide icon name").addText((text) => {
-      text.setValue(nodeType.icon);
-      text.onChange(async (value) => {
-        nodeType.icon = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    new import_obsidian.Setting(typeContainer).setName("Color").addText((text) => {
-      text.setValue(nodeType.color || "#6366f1");
-      text.onChange(async (value) => {
-        nodeType.color = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    const propsHeader = typeContainer.createDiv();
-    propsHeader.style.display = "flex";
-    propsHeader.style.justifyContent = "space-between";
-    propsHeader.style.alignItems = "center";
-    propsHeader.style.marginTop = "12px";
-    propsHeader.createEl("strong", { text: "Properties" });
-    const addPropBtn = propsHeader.createEl("button", { text: "+ Add Property" });
-    addPropBtn.addEventListener("click", async () => {
-      nodeType.properties.push({
-        name: "new-property",
-        type: "text"
-      });
-      await this.plugin.saveSettings();
-      this.display();
-    });
-    for (let i = 0; i < nodeType.properties.length; i++) {
-      const prop = nodeType.properties[i];
-      this.renderPropertySettings(typeContainer, nodeType, prop, i);
+  loadPersistedWidth() {
+    var _a;
+    try {
+      const savedWidth = (_a = this.config) == null ? void 0 : _a.get("leftWidth");
+      if (savedWidth && typeof savedWidth === "number") {
+        this.leftPanel.style.width = `${savedWidth}px`;
+      }
+    } catch (e) {
     }
-    new import_obsidian.Setting(typeContainer).addButton((btn) => {
-      btn.setButtonText("Delete Type").setWarning().onClick(async () => {
-        const index = this.plugin.settings.nodeTypes.indexOf(nodeType);
-        if (index > -1) {
-          this.plugin.settings.nodeTypes.splice(index, 1);
-          await this.plugin.saveSettings();
-          this.display();
+  }
+  persistWidth() {
+    try {
+      const width = this.leftPanel.offsetWidth;
+      if (this.config && typeof this.config.set === "function") {
+        this.config.set("leftWidth", width);
+      }
+    } catch (e) {
+    }
+  }
+  loadNavbarState() {
+    var _a;
+    try {
+      const saved = (_a = this.config) == null ? void 0 : _a.get("navbarVisible");
+      if (typeof saved === "boolean") {
+        this.navbarVisible = saved;
+        this.applyNavbarState();
+      }
+    } catch (e) {
+    }
+  }
+  toggleNavbar() {
+    this.navbarVisible = !this.navbarVisible;
+    this.applyNavbarState();
+    try {
+      if (this.config && typeof this.config.set === "function") {
+        this.config.set("navbarVisible", this.navbarVisible);
+      }
+    } catch (e) {
+    }
+  }
+  applyNavbarState() {
+    const leafContent = this.containerEl.closest(".workspace-leaf-content");
+    if (leafContent) {
+      if (this.navbarVisible) {
+        leafContent.removeClass("hide-bases-navbar");
+      } else {
+        leafContent.addClass("hide-bases-navbar");
+      }
+    }
+  }
+  onDataUpdated() {
+    this.renderLeftPanel();
+    requestAnimationFrame(() => {
+      this.containerEl.addClass("ready");
+    });
+    if (this.selectedPath) {
+      const stillExists = this.findEntryByPath(this.selectedPath);
+      if (stillExists) {
+        this.updateSelectionHighlight();
+      } else {
+        this.selectFirstEntry();
+      }
+    } else {
+      this.selectFirstEntry();
+    }
+  }
+  findEntryByPath(path) {
+    for (const group of this.data.groupedData) {
+      for (const entry of group.entries) {
+        if (entry.file.path === path) {
+          return entry;
         }
+      }
+    }
+    return null;
+  }
+  selectFirstEntry() {
+    if (this.data.groupedData.length > 0 && this.data.groupedData[0].entries.length > 0) {
+      const entry = this.data.groupedData[0].entries[0];
+      this.openFileInEditor(entry);
+    } else {
+      this.renderEmptyState();
+    }
+  }
+  renderLeftPanel() {
+    var _a;
+    this.leftPanel.empty();
+    const baseTitle = ((_a = this.config) == null ? void 0 : _a.get("title")) || "Notes";
+    const header = this.leftPanel.createDiv("bases-sidebar-header");
+    header.createDiv({ cls: "bases-sidebar-title", text: String(baseTitle) });
+    const controls = header.createDiv();
+    controls.style.display = "flex";
+    controls.style.gap = "4px";
+    const toggleBtn = controls.createDiv("bases-sidebar-toggle-navbar");
+    toggleBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line></svg>`;
+    toggleBtn.setAttr("aria-label", this.navbarVisible ? "Hide navbar" : "Show navbar");
+    toggleBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.toggleNavbar();
+      toggleBtn.setAttr("aria-label", this.navbarVisible ? "Hide navbar" : "Show navbar");
+    });
+    const addBtn = controls.createDiv("bases-sidebar-add-btn");
+    addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
+    addBtn.createSpan({ text: "Add" });
+    addBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await this.createNewFile();
+    });
+    this.notesContainer = this.leftPanel.createDiv("bases-sidebar-notes-container");
+    for (const group of this.data.groupedData) {
+      const groupEl = this.notesContainer.createDiv("bases-sidebar-group");
+      let groupContentContainer = groupEl;
+      if (group.hasKey() && group.key) {
+        const keyStr = group.key.toString();
+        if (keyStr && keyStr !== "undefined") {
+          const header2 = groupEl.createDiv("bases-sidebar-group-header");
+          const toggle = header2.createDiv("bases-sidebar-group-toggle");
+          toggle.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+          header2.createSpan({ text: keyStr });
+          groupContentContainer = groupEl.createDiv("bases-sidebar-group-content");
+          const isCollapsed = this.collapsedGroups.has(keyStr);
+          if (isCollapsed) {
+            toggle.addClass("is-collapsed");
+            groupContentContainer.addClass("is-collapsed");
+          }
+          header2.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (this.collapsedGroups.has(keyStr)) {
+              this.collapsedGroups.delete(keyStr);
+              toggle.removeClass("is-collapsed");
+              groupContentContainer.removeClass("is-collapsed");
+            } else {
+              this.collapsedGroups.add(keyStr);
+              toggle.addClass("is-collapsed");
+              groupContentContainer.addClass("is-collapsed");
+            }
+            this.saveCollapsedState();
+          });
+        }
+      }
+      for (const entry of group.entries) {
+        this.renderNoteItem(groupContentContainer, entry);
+      }
+    }
+  }
+  renderNoteItem(parent, entry) {
+    var _a, _b, _c, _d, _e;
+    const noteItem = parent.createDiv("bases-sidebar-note-item");
+    const filePath = ((_a = entry.file) == null ? void 0 : _a.path) || "";
+    noteItem.dataset.path = filePath;
+    if (this.selectedPath === filePath) {
+      noteItem.addClass("is-selected");
+    }
+    const contentEl = noteItem.createDiv("bases-sidebar-note-content");
+    const fileName = ((_b = entry.file) == null ? void 0 : _b.basename) || ((_c = entry.file) == null ? void 0 : _c.name) || "Untitled";
+    contentEl.createDiv({
+      cls: "bases-sidebar-note-title",
+      text: fileName
+    });
+    const metaEl = contentEl.createDiv("bases-sidebar-note-meta");
+    const order = ((_d = this.config) == null ? void 0 : _d.getOrder()) || [];
+    let dateValue = "";
+    let tagValue = "";
+    for (const propertyName of order) {
+      try {
+        const { type, name } = (0, import_obsidian.parsePropertyId)(propertyName);
+        const value = entry.getValue(propertyName);
+        if (!value)
+          continue;
+        if (typeof value === "object" && value.isEmpty && typeof value.isEmpty === "function" && value.isEmpty())
+          continue;
+        const valueStr = value.toString ? value.toString() : String(value);
+        if (!valueStr || valueStr === "undefined" || valueStr === "null")
+          continue;
+        if (!dateValue && (name.toLowerCase().includes("date") || name.toLowerCase().includes("created") || name.toLowerCase().includes("time"))) {
+          dateValue = this.formatDate(valueStr);
+        } else if (!tagValue && valueStr && name !== "name") {
+          tagValue = valueStr;
+        }
+      } catch (e) {
+      }
+    }
+    if (!dateValue && ((_e = entry.file) == null ? void 0 : _e.stat)) {
+      dateValue = this.formatDate(new Date(entry.file.stat.ctime).toISOString());
+    }
+    if (dateValue) {
+      metaEl.createSpan({ cls: "bases-sidebar-note-date", text: dateValue });
+    }
+    if (dateValue && tagValue) {
+      metaEl.createSpan({ text: " \xB7 " });
+    }
+    if (tagValue) {
+      metaEl.createSpan({ text: tagValue });
+    }
+    noteItem.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openFileInEditor(entry);
+    });
+    noteItem.addEventListener("mouseover", (evt) => {
+      this.obsidianApp.workspace.trigger("hover-link", {
+        event: evt,
+        source: "bases",
+        hoverParent: this,
+        targetEl: noteItem,
+        linktext: filePath
       });
     });
   }
-  renderPropertySettings(container, nodeType, prop, index) {
-    const propRow = container.createDiv();
-    propRow.style.display = "flex";
-    propRow.style.gap = "8px";
-    propRow.style.alignItems = "center";
-    propRow.style.marginTop = "8px";
-    propRow.style.paddingLeft = "16px";
-    const nameInput = propRow.createEl("input", { type: "text" });
-    nameInput.value = prop.name;
-    nameInput.placeholder = "Property name";
-    nameInput.style.flex = "1";
-    nameInput.addEventListener("change", async () => {
-      prop.name = nameInput.value;
-      await this.plugin.saveSettings();
+  updateSelectionHighlight() {
+    const items = this.leftPanel.querySelectorAll(".bases-sidebar-note-item");
+    items.forEach((item) => {
+      const htmlItem = item;
+      if (htmlItem.dataset.path === this.selectedPath) {
+        htmlItem.addClass("is-selected");
+      } else {
+        htmlItem.removeClass("is-selected");
+      }
     });
-    const typeSelect = propRow.createEl("select");
-    ["text", "number", "date", "checkbox", "select"].forEach((t) => {
-      const opt = typeSelect.createEl("option", { value: t, text: t });
-      if (prop.type === t)
-        opt.selected = true;
-    });
-    typeSelect.addEventListener("change", async () => {
-      prop.type = typeSelect.value;
-      await this.plugin.saveSettings();
-      this.display();
-    });
-    if (prop.type === "select") {
-      const optionsInput = propRow.createEl("input", { type: "text" });
-      optionsInput.value = (prop.options || []).join(", ");
-      optionsInput.placeholder = "Options (comma-separated)";
-      optionsInput.style.flex = "1";
-      optionsInput.addEventListener("change", async () => {
-        prop.options = optionsInput.value.split(",").map((s) => s.trim()).filter(Boolean);
-        await this.plugin.saveSettings();
-      });
+  }
+  async openFileInEditor(entry) {
+    var _a;
+    const filePath = (_a = entry.file) == null ? void 0 : _a.path;
+    if (!filePath)
+      return;
+    const file = this.obsidianApp.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof import_obsidian.TFile))
+      return;
+    this.selectedPath = filePath;
+    this.updateSelectionHighlight();
+    if (this.embeddedLeaf && this.embeddedLeaf.view instanceof import_obsidian.MarkdownView) {
+      const currentFile = this.embeddedLeaf.view.file;
+      if (currentFile && currentFile.path === filePath)
+        return;
+      await this.embeddedLeaf.openFile(file);
+      await this.setReadingMode();
+      return;
     }
-    const deleteBtn = propRow.createEl("button", { text: "x" });
-    deleteBtn.style.padding = "2px 8px";
-    deleteBtn.addEventListener("click", async () => {
-      nodeType.properties.splice(index, 1);
-      await this.plugin.saveSettings();
-      this.display();
-    });
+    if (this.embeddedLeaf) {
+      this.embeddedLeaf.detach();
+      this.embeddedLeaf = null;
+    }
+    this.rightPanel.empty();
+    const leaf = this.obsidianApp.workspace.createLeafInParent(
+      this.obsidianApp.workspace.rootSplit,
+      0
+    );
+    await leaf.openFile(file);
+    await this.setReadingMode();
+    this.embeddedLeaf = leaf;
+    this.plugin.registerEmbeddedLeaf(this.viewId, leaf);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const leafElement = leaf.containerEl;
+    if (leafElement && leafElement.parentElement) {
+      leafElement.parentElement.removeChild(leafElement);
+      this.rightPanel.appendChild(leafElement);
+      this.rightPanel.offsetHeight;
+    }
+  }
+  async setReadingMode() {
+    if (this.embeddedLeaf && this.embeddedLeaf.view instanceof import_obsidian.MarkdownView) {
+      const view = this.embeddedLeaf.view;
+      const currentState = view.getState();
+      if (currentState.mode !== "preview") {
+        await view.setState({
+          ...currentState,
+          mode: "preview"
+        }, { history: false });
+      }
+    }
+  }
+  async createNewFile() {
+    const newFileName = `Untitled ${Date.now()}.md`;
+    const content = `---
+tags:
+  - project
+---
+
+`;
+    const newFile = await this.obsidianApp.vault.create(newFileName, content);
+    const entry = {
+      file: {
+        path: newFile.path,
+        basename: newFile.basename,
+        name: newFile.name,
+        stat: newFile.stat
+      },
+      getValue: () => null
+    };
+    await this.openFileInEditor(entry);
+  }
+  renderEmptyState() {
+    this.rightPanel.empty();
+    const emptyState = this.rightPanel.createDiv("bases-sidebar-empty-state");
+    emptyState.createDiv({ text: "Select a note to view its content" });
+  }
+  formatDate(dateStr) {
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime()))
+        return dateStr;
+      const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}, ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    } catch (e) {
+      return dateStr;
+    }
+  }
+  onunload() {
+    if (this.embeddedLeaf) {
+      this.embeddedLeaf.detach();
+      this.embeddedLeaf = null;
+    }
+    this.plugin.cleanupEmbeddedLeaf(this.viewId);
   }
 };
