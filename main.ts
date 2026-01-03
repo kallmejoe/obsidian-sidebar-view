@@ -1,0 +1,817 @@
+import {
+  Plugin,
+  HoverPopover,
+  TFile,
+  BasesView,
+  QueryController,
+  parsePropertyId,
+  App,
+  WorkspaceLeaf,
+  MarkdownView
+} from 'obsidian';
+
+export const SidebarViewType = 'sidebar-view';
+
+export default class BasesSidebarPlugin extends Plugin {
+  private embeddedLeaves: Map<string, WorkspaceLeaf> = new Map();
+
+  async onload() {
+    this.registerBasesView(SidebarViewType, {
+      name: 'Sidebar',
+      icon: 'layout-sidebar-left',
+      factory: (controller: QueryController, containerEl: HTMLElement) => {
+        return new SidebarBasesView(controller, containerEl, this.app, this);
+      },
+      options: () => ([
+        {
+          type: 'text',
+          displayName: 'Group separator',
+          key: 'groupSeparator',
+          default: ' · ',
+        },
+        {
+          type: 'toggle',
+          displayName: 'Show properties',
+          key: 'showProperties',
+          default: false,
+        },
+      ]),
+    });
+
+    this.loadStyles();
+  }
+
+  registerEmbeddedLeaf(id: string, leaf: WorkspaceLeaf) {
+    const oldLeaf = this.embeddedLeaves.get(id);
+    if (oldLeaf) {
+      oldLeaf.detach();
+    }
+    this.embeddedLeaves.set(id, leaf);
+  }
+
+  cleanupEmbeddedLeaf(id: string) {
+    const leaf = this.embeddedLeaves.get(id);
+    if (leaf) {
+      leaf.detach();
+      this.embeddedLeaves.delete(id);
+    }
+  }
+
+  onunload() {
+    for (const [id, leaf] of this.embeddedLeaves) {
+      leaf.detach();
+    }
+    this.embeddedLeaves.clear();
+  }
+
+  loadStyles() {
+    const styleEl = document.createElement('style');
+    styleEl.id = 'bases-sidebar-view-styles';
+    styleEl.textContent = `
+      /* Full height container - ensure Obsidian leaf header stays visible */
+      .workspace-leaf-content[data-type='bases'] {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+
+      /* Obsidian leaf header (file name, etc.) - always visible */
+      .workspace-leaf-content[data-type='bases'] > .view-header {
+        flex-shrink: 0;
+      }
+
+      /* View content takes remaining space */
+      .workspace-leaf-content[data-type='bases'] > .view-content {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        position: relative;
+      }
+
+      /* Bases settings navbar - positioned at top */
+      .workspace-leaf-content[data-type='bases'] .view-content > .bases-header {
+        position: relative;
+        z-index: 1;
+        flex-shrink: 0;
+      }
+
+      /* Hide Bases settings navbar when toggled */
+      .workspace-leaf-content[data-type='bases'].hide-bases-navbar .view-content > .bases-header {
+        display: none !important;
+      }
+
+      /* Our sidebar container - absolutely positioned to fill remaining space */
+      .bases-sidebar-view-container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        overflow: hidden;
+        z-index: 0;
+        visibility: hidden;
+      }
+
+      /* Show container after initial layout is complete */
+      .bases-sidebar-view-container.ready {
+        visibility: visible;
+      }
+
+      /* When Bases navbar is visible, push container down */
+      .workspace-leaf-content[data-type='bases']:not(.hide-bases-navbar) .bases-sidebar-view-container {
+        top: var(--bases-header-height, 48px);
+      }
+
+      /* Left panel */
+      .bases-sidebar-left-panel {
+        width: 280px;
+        min-width: 150px;
+        height: 100%;
+        overflow-y: auto;
+        overflow-x: hidden;
+        border-right: 1px solid var(--background-modifier-border);
+        background-color: var(--background-secondary);
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Resizer */
+      .bases-sidebar-resizer {
+        width: 4px;
+        height: 100%;
+        background-color: var(--background-modifier-border);
+        cursor: col-resize;
+        flex-shrink: 0;
+        user-select: none;
+      }
+
+      .bases-sidebar-resizer:hover,
+      .bases-sidebar-resizer:active {
+        background-color: var(--interactive-accent);
+      }
+
+      .bases-sidebar-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--background-modifier-border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+      }
+
+      .bases-sidebar-title {
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--text-normal);
+      }
+
+      .bases-sidebar-add-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        font-size: 13px;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 4px;
+      }
+
+      .bases-sidebar-add-btn:hover {
+        background-color: var(--background-modifier-hover);
+        color: var(--text-normal);
+      }
+
+      /* Notes list container */
+      .bases-sidebar-notes-container {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+      }
+
+      .bases-sidebar-group {
+        margin-bottom: 8px;
+      }
+
+      .bases-sidebar-group-header {
+        padding: 8px 16px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .bases-sidebar-group-header:hover {
+        color: var(--text-normal);
+      }
+
+      .bases-sidebar-group-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 4px;
+        width: 16px;
+        height: 16px;
+        transition: transform 0.2s ease;
+      }
+
+      .bases-sidebar-group-toggle.is-collapsed {
+        transform: rotate(-90deg);
+      }
+
+      .bases-sidebar-group-content.is-collapsed {
+        display: none;
+      }
+
+      .bases-sidebar-note-item {
+        display: flex;
+        align-items: flex-start;
+        padding: 10px 16px;
+        cursor: pointer;
+        border-left: 3px solid transparent;
+        transition: background-color 0.1s ease;
+      }
+
+      .bases-sidebar-note-item:hover {
+        background-color: var(--background-modifier-hover);
+      }
+
+      .bases-sidebar-note-item.is-selected {
+        background-color: var(--background-modifier-active-hover);
+        border-left-color: var(--interactive-accent);
+      }
+
+      .bases-sidebar-note-content {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .bases-sidebar-note-title {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-normal);
+        margin-bottom: 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .bases-sidebar-note-meta {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--text-muted);
+        flex-wrap: wrap;
+      }
+
+      /* Right panel */
+      .bases-sidebar-right-panel {
+        flex: 1;
+        height: 100%;
+        min-width: 0;
+        overflow: hidden;
+        background-color: var(--background-primary);
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Hide reading mode toggle in embedded editor */
+      .bases-sidebar-right-panel .view-header-icon[aria-label*="reading"],
+      .bases-sidebar-right-panel .view-header-icon[aria-label*="edit"],
+      .bases-sidebar-right-panel .view-action[aria-label*="reading"],
+      .bases-sidebar-right-panel .view-action[aria-label*="edit"] {
+        display: none !important;
+      }
+
+      .bases-sidebar-right-panel > .workspace-leaf {
+        flex: 1;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .bases-sidebar-right-panel .workspace-leaf-content {
+        flex: 1;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .bases-sidebar-right-panel .view-content {
+        flex: 1;
+        overflow: auto;
+      }
+
+      .bases-sidebar-empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        flex: 1;
+        height: 100%;
+        color: var(--text-muted);
+        font-size: 14px;
+      }
+
+      /* Toggle navbar button */
+      .bases-sidebar-toggle-navbar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 8px;
+        margin-left: 8px;
+        font-size: 13px;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 4px;
+      }
+
+      .bases-sidebar-toggle-navbar:hover {
+        background-color: var(--background-modifier-hover);
+        color: var(--text-normal);
+      }
+    `;
+    document.head.appendChild(styleEl);
+    this.register(() => styleEl.remove());
+  }
+}
+
+class SidebarBasesView extends BasesView {
+  readonly type = SidebarViewType;
+  private containerEl: HTMLElement;
+  private leftPanel: HTMLElement;
+  private notesContainer: HTMLElement;
+  private rightPanel: HTMLElement;
+  private resizer: HTMLElement;
+  private selectedPath: string | null = null;
+  private obsidianApp: App;
+  private plugin: BasesSidebarPlugin;
+  private viewId: string;
+  private embeddedLeaf: WorkspaceLeaf | null = null;
+  private navbarVisible: boolean = true;
+  private collapsedGroups: Set<string> = new Set();
+  hoverPopover: HoverPopover | null = null;
+
+  constructor(controller: QueryController, parentEl: HTMLElement, app: App, plugin: BasesSidebarPlugin) {
+    super(controller);
+    this.obsidianApp = app;
+    this.plugin = plugin;
+    this.viewId = `sidebar-${Date.now()}`;
+
+    this.containerEl = parentEl.createDiv('bases-sidebar-view-container');
+    this.leftPanel = this.containerEl.createDiv('bases-sidebar-left-panel');
+    this.resizer = this.containerEl.createDiv('bases-sidebar-resizer');
+    this.rightPanel = this.containerEl.createDiv('bases-sidebar-right-panel');
+
+    this.setupResizer();
+    this.loadPersistedWidth();
+    this.loadNavbarState();
+    this.loadCollapsedState();
+    this.renderEmptyState();
+  }
+
+  private loadCollapsedState(): void {
+    try {
+      const saved = this.config?.get('collapsedGroups');
+      if (Array.isArray(saved)) {
+        this.collapsedGroups = new Set(saved);
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  private saveCollapsedState(): void {
+    try {
+      if (this.config && typeof this.config.set === 'function') {
+        this.config.set('collapsedGroups', Array.from(this.collapsedGroups));
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  private setupResizer(): void {
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const delta = e.clientX - startX;
+      const newWidth = Math.max(150, Math.min(600, startWidth + delta));
+      this.leftPanel.style.width = `${newWidth}px`;
+    };
+
+    const onMouseUp = () => {
+      if (!isResizing) return;
+      isResizing = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      this.resizer.style.backgroundColor = '';
+      this.persistWidth();
+    };
+
+    this.resizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      isResizing = true;
+      startX = e.clientX;
+      startWidth = this.leftPanel.offsetWidth;
+      document.body.style.cursor = 'col-resize';
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+
+  private loadPersistedWidth(): void {
+    try {
+      const savedWidth = this.config?.get('leftWidth');
+      if (savedWidth && typeof savedWidth === 'number') {
+        this.leftPanel.style.width = `${savedWidth}px`;
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  private persistWidth(): void {
+    try {
+      const width = this.leftPanel.offsetWidth;
+      if (this.config && typeof this.config.set === 'function') {
+        this.config.set('leftWidth', width);
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  private loadNavbarState(): void {
+    try {
+      const saved = this.config?.get('navbarVisible');
+      if (typeof saved === 'boolean') {
+        this.navbarVisible = saved;
+        this.applyNavbarState();
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  private toggleNavbar(): void {
+    this.navbarVisible = !this.navbarVisible;
+    this.applyNavbarState();
+
+    try {
+      if (this.config && typeof this.config.set === 'function') {
+        this.config.set('navbarVisible', this.navbarVisible);
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
+  private applyNavbarState(): void {
+    const leafContent = this.containerEl.closest('.workspace-leaf-content');
+    if (leafContent) {
+      if (this.navbarVisible) {
+        leafContent.removeClass('hide-bases-navbar');
+      } else {
+        leafContent.addClass('hide-bases-navbar');
+      }
+    }
+  }
+
+  public onDataUpdated(): void {
+    this.renderLeftPanel();
+
+    // Make container visible after initial render
+    requestAnimationFrame(() => {
+      this.containerEl.addClass('ready');
+    });
+
+    if (this.selectedPath) {
+      const stillExists = this.findEntryByPath(this.selectedPath);
+      if (stillExists) {
+        this.updateSelectionHighlight();
+      } else {
+        this.selectFirstEntry();
+      }
+    } else {
+      this.selectFirstEntry();
+    }
+  }
+
+  private findEntryByPath(path: string): any {
+    for (const group of this.data.groupedData) {
+      for (const entry of group.entries) {
+        if (entry.file.path === path) {
+          return entry;
+        }
+      }
+    }
+    return null;
+  }
+
+  private selectFirstEntry(): void {
+    if (this.data.groupedData.length > 0 && this.data.groupedData[0].entries.length > 0) {
+      const entry = this.data.groupedData[0].entries[0];
+      this.openFileInEditor(entry);
+    } else {
+      this.renderEmptyState();
+    }
+  }
+
+  private renderLeftPanel(): void {
+    this.leftPanel.empty();
+
+    const baseTitle = this.config?.get('title') || 'Notes';
+
+    const header = this.leftPanel.createDiv('bases-sidebar-header');
+    header.createDiv({ cls: 'bases-sidebar-title', text: String(baseTitle) });
+
+    const controls = header.createDiv();
+    controls.style.display = 'flex';
+    controls.style.gap = '4px';
+
+    // Toggle navbar button
+    const toggleBtn = controls.createDiv('bases-sidebar-toggle-navbar');
+    toggleBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line></svg>`;
+    toggleBtn.setAttr('aria-label', this.navbarVisible ? 'Hide navbar' : 'Show navbar');
+
+    toggleBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.toggleNavbar();
+      toggleBtn.setAttr('aria-label', this.navbarVisible ? 'Hide navbar' : 'Show navbar');
+    });
+
+    // Add button
+    const addBtn = controls.createDiv('bases-sidebar-add-btn');
+    addBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
+    addBtn.createSpan({ text: 'Add' });
+
+    addBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await this.createNewFile();
+    });
+
+    this.notesContainer = this.leftPanel.createDiv('bases-sidebar-notes-container');
+
+    for (const group of this.data.groupedData) {
+      const groupEl = this.notesContainer.createDiv('bases-sidebar-group');
+      let groupContentContainer = groupEl;
+
+      if (group.hasKey() && group.key) {
+        const keyStr = group.key.toString();
+        if (keyStr && keyStr !== 'undefined') {
+          const header = groupEl.createDiv('bases-sidebar-group-header');
+
+          const toggle = header.createDiv('bases-sidebar-group-toggle');
+          toggle.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+
+          header.createSpan({ text: keyStr });
+
+          groupContentContainer = groupEl.createDiv('bases-sidebar-group-content');
+
+          const isCollapsed = this.collapsedGroups.has(keyStr);
+          if (isCollapsed) {
+            toggle.addClass('is-collapsed');
+            groupContentContainer.addClass('is-collapsed');
+          }
+
+          header.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (this.collapsedGroups.has(keyStr)) {
+              this.collapsedGroups.delete(keyStr);
+              toggle.removeClass('is-collapsed');
+              groupContentContainer.removeClass('is-collapsed');
+            } else {
+              this.collapsedGroups.add(keyStr);
+              toggle.addClass('is-collapsed');
+              groupContentContainer.addClass('is-collapsed');
+            }
+            this.saveCollapsedState();
+          });
+        }
+      }
+
+      for (const entry of group.entries) {
+        this.renderNoteItem(groupContentContainer, entry);
+      }
+    }
+  }
+
+  private renderNoteItem(parent: HTMLElement, entry: any): void {
+    const noteItem = parent.createDiv('bases-sidebar-note-item');
+    const filePath = entry.file?.path || '';
+    noteItem.dataset.path = filePath;
+
+    if (this.selectedPath === filePath) {
+      noteItem.addClass('is-selected');
+    }
+
+    const contentEl = noteItem.createDiv('bases-sidebar-note-content');
+
+    const fileName = entry.file?.basename || entry.file?.name || 'Untitled';
+    contentEl.createDiv({
+      cls: 'bases-sidebar-note-title',
+      text: fileName
+    });
+
+    const metaEl = contentEl.createDiv('bases-sidebar-note-meta');
+
+    const order = this.config?.getOrder() || [];
+    let dateValue = '';
+    let tagValue = '';
+
+    for (const propertyName of order) {
+      try {
+        const { type, name } = parsePropertyId(propertyName);
+        const value = entry.getValue(propertyName);
+
+        if (!value) continue;
+        if (typeof value === 'object' && value.isEmpty && typeof value.isEmpty === 'function' && value.isEmpty()) continue;
+
+        const valueStr = value.toString ? value.toString() : String(value);
+        if (!valueStr || valueStr === 'undefined' || valueStr === 'null') continue;
+
+        if (!dateValue && (name.toLowerCase().includes('date') || name.toLowerCase().includes('created') || name.toLowerCase().includes('time'))) {
+          dateValue = this.formatDate(valueStr);
+        } else if (!tagValue && valueStr && name !== 'name') {
+          tagValue = valueStr;
+        }
+      } catch (e) {
+        // Ignore property parsing errors
+      }
+    }
+
+    if (!dateValue && entry.file?.stat) {
+      dateValue = this.formatDate(new Date(entry.file.stat.ctime).toISOString());
+    }
+
+    if (dateValue) {
+      metaEl.createSpan({ cls: 'bases-sidebar-note-date', text: dateValue });
+    }
+
+    if (dateValue && tagValue) {
+      metaEl.createSpan({ text: ' · ' });
+    }
+
+    if (tagValue) {
+      metaEl.createSpan({ text: tagValue });
+    }
+
+    noteItem.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openFileInEditor(entry);
+    });
+
+    noteItem.addEventListener('mouseover', (evt) => {
+      this.obsidianApp.workspace.trigger('hover-link', {
+        event: evt,
+        source: 'bases',
+        hoverParent: this,
+        targetEl: noteItem,
+        linktext: filePath,
+      });
+    });
+  }
+
+  private updateSelectionHighlight(): void {
+    const items = this.leftPanel.querySelectorAll('.bases-sidebar-note-item');
+    items.forEach((item: Element) => {
+      const htmlItem = item as HTMLElement;
+      if (htmlItem.dataset.path === this.selectedPath) {
+        htmlItem.addClass('is-selected');
+      } else {
+        htmlItem.removeClass('is-selected');
+      }
+    });
+  }
+
+  private async openFileInEditor(entry: any): Promise<void> {
+    const filePath = entry.file?.path;
+    if (!filePath) return;
+
+    const file = this.obsidianApp.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile)) return;
+
+    this.selectedPath = filePath;
+    this.updateSelectionHighlight();
+
+    // Reuse existing leaf for smooth transitions
+    if (this.embeddedLeaf && this.embeddedLeaf.view instanceof MarkdownView) {
+      const currentFile = this.embeddedLeaf.view.file;
+      if (currentFile && currentFile.path === filePath) return;
+
+      await this.embeddedLeaf.openFile(file);
+      await this.setReadingMode();
+      return;
+    }
+
+    // Create new leaf only on first open
+    if (this.embeddedLeaf) {
+      this.embeddedLeaf.detach();
+      this.embeddedLeaf = null;
+    }
+
+    this.rightPanel.empty();
+
+    const leaf = this.obsidianApp.workspace.createLeafInParent(
+      this.obsidianApp.workspace.rootSplit,
+      0
+    );
+
+    await leaf.openFile(file);
+    await this.setReadingMode();
+
+    this.embeddedLeaf = leaf;
+    this.plugin.registerEmbeddedLeaf(this.viewId, leaf);
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const leafElement = (leaf as any).containerEl as HTMLElement;
+
+    if (leafElement && leafElement.parentElement) {
+      leafElement.parentElement.removeChild(leafElement);
+      this.rightPanel.appendChild(leafElement);
+      this.rightPanel.offsetHeight; // Force reflow
+    }
+  }
+
+  private async setReadingMode(): Promise<void> {
+    if (this.embeddedLeaf && this.embeddedLeaf.view instanceof MarkdownView) {
+      const view = this.embeddedLeaf.view;
+      const currentState = view.getState();
+
+      // Only switch to preview if not already in preview mode
+      if (currentState.mode !== 'preview') {
+        await view.setState({
+          ...currentState,
+          mode: 'preview'
+        }, { history: false });
+      }
+    }
+  }
+
+  private async createNewFile(): Promise<void> {
+    const newFileName = `Untitled ${Date.now()}.md`;
+    const content = `---\ntags:\n  - project\n---\n\n`;
+    const newFile = await this.obsidianApp.vault.create(newFileName, content);
+
+    const entry = {
+      file: {
+        path: newFile.path,
+        basename: newFile.basename,
+        name: newFile.name,
+        stat: newFile.stat
+      },
+      getValue: () => null
+    };
+
+    await this.openFileInEditor(entry);
+  }
+
+  private renderEmptyState(): void {
+    this.rightPanel.empty();
+    const emptyState = this.rightPanel.createDiv('bases-sidebar-empty-state');
+    emptyState.createDiv({ text: 'Select a note to view its content' });
+  }
+
+  private formatDate(dateStr: string): string {
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return dateStr;
+
+      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+      return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    } catch {
+      return dateStr;
+    }
+  }
+
+  onunload(): void {
+    if (this.embeddedLeaf) {
+      this.embeddedLeaf.detach();
+      this.embeddedLeaf = null;
+    }
+    this.plugin.cleanupEmbeddedLeaf(this.viewId);
+  }
+}

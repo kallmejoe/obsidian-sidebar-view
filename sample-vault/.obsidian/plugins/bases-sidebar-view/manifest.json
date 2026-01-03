@@ -1,0 +1,10 @@
+{
+  "id": "bases-sidebar-view",
+  "name": "Bases Sidebar View",
+  "version": "1.0.0",
+  "minAppVersion": "1.8.0",
+  "description": "A sidebar view for Bases that displays notes on the left and previews them on the right",
+  "author": "Developer",
+  "isDesktopOnly": false,
+  "icon": "layout-sidebar-left"
+}

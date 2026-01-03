@@ -1,0 +1,17 @@
+views:
+  - type: sidebar-view
+    name: Table
+    filters:
+      and:
+        - file.hasTag("project")
+    groupBy:
+      property: file.tags
+      direction: ASC
+    order:
+      - file.ctime
+      - file.name
+      - file.backlinks
+    sort: []
+    leftWidth: 280
+    showProperties: false
+    navbarVisible: true

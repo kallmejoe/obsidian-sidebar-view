@@ -1,0 +1,9 @@
+{
+  "id": "node-pages",
+  "name": "Node Pages",
+  "version": "1.0.0",
+  "minAppVersion": "1.5.0",
+  "description": "Display pages as collapsible nodes with inline editable properties based on tags",
+  "author": "Developer",
+  "isDesktopOnly": false
+}
